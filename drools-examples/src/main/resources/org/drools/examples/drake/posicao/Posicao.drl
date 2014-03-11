@@ -1,0 +1,154 @@
+package org.drools.examples.drake.posicao;
+ 
+import org.drools.examples.drake.posicao.domain.*;
+import java.util.*;
+
+global java.util.List list;
+
+rule "Regra 00 - Quando ocorre uma posição sem acumuladores definidos e não existe nenhuma outra posição anterior definida, então cria uma posição fictícia inicial ZERADA."
+    no-loop
+    salience(-10000)
+    when
+        $posicao : Posicao(nenhumAcumuladorDefinido)
+        and
+        not $posicaoAnterior : Posicao(data < $posicao.data)
+
+    then
+        insert(new Posicao($posicao.getDataAnterior(), $posicao.getTrabalhador(), 0, 0, 0));
+ end
+
+rule "Regra 01 - Quando ocorre um evento de embarque ou trabalho, então os próximos dias que ainda não possuem um evento definido serão trabalho"
+   when
+        $evento : Evento(tipo == Evento.TRABALHO)
+        not Evento(data == $evento.proximaData, trabalhador == $evento.trabalhador)
+        $parametro : Parametro()
+        Evento(data == $evento.data,
+               trabalhador == $evento.trabalhador,
+               proximaData <= $parametro.termino)
+    then
+        insert (new Evento($evento.getProximaData(), Evento.TRABALHO, $evento.getTrabalhador()));
+end
+
+
+rule "Regra 01 - Quando ocorre um evento de desembarque ou folga, então os próximos dias que ainda não possuem um evento definido serão folga"
+   when
+        $evento : (Evento(tipo == Evento.DESEMBARQUE) or Evento(tipo == Evento.FOLGA))
+        not Evento(data == $evento.proximaData, trabalhador == $evento.trabalhador)
+        $parametro : Parametro()
+        Evento(data == $evento.data,
+               trabalhador == $evento.trabalhador,
+               proximaData <= $parametro.termino)
+    then
+        insert (new Evento($evento.getProximaData(), Evento.FOLGA, $evento.getTrabalhador()));
+end
+
+rule "Regra 02 - Quando existe um evento que ainda não possui uma posição, então cria a posição sem calcular a ocorrência"
+    when
+        $evento : Evento()
+        not Posicao(data == $evento.data, trabalhador == $evento.trabalhador)
+    then
+        insert (new Posicao($evento.getData(), $evento.getTrabalhador(), Posicao.NAO_CALCULADA));
+end
+
+
+ rule "Regra 03 - Quando ocorre um evento de trabalho em uma escala de trabalho e ainda não existe ocorrência definida para essa posição, então a mesma é regular"
+ 	no-loop
+ 	when
+ 		$evento : (Evento(tipo == Evento.TRABALHO) or Evento(tipo == Evento.EMBARQUE))
+        and
+        $escala : Escala(tipo == Escala.TRABALHO,
+                         $evento.data >= inicio,
+                         $evento.data <= termino,
+                         trabalhador == $evento.trabalhador)
+        and
+        $posicao : Posicao(data == $evento.data,
+                           ocorrencia == Posicao.NAO_CALCULADA,
+                           trabalhador == $evento.trabalhador)
+ 	then
+ 		System.out.println("Trabalhador "+ $posicao.getTrabalhador() + " trabalhou no dia " + $evento.getData() + " e era a escala de trabalho.");
+ 		modify ($posicao) { setOcorrencia(Posicao.REGULAR) }
+ end
+
+ rule "Regra 04 - Quando ocorre um evento de folga em uma escala de folga e ainda não existe ocorrência definida para essa posição, então a mesma é folga"
+    no-loop
+  	when
+  		 $evento : Evento(tipo == Evento.FOLGA)
+         and
+         $escala : Escala(tipo == Escala.FOLGA,
+                          $evento.data >= inicio,
+                          $evento.data <= termino,
+                          trabalhador == $evento.trabalhador)
+         and
+         $posicao : Posicao(data == $evento.data,
+                            ocorrencia == Posicao.NAO_CALCULADA,
+                            trabalhador == $evento.trabalhador)
+  	then
+  		System.out.println("Trabalhador "+ $posicao.getTrabalhador() + " folgou no dia " + $evento.getData() + " e era a escala de folga.");
+  		modify ($posicao) { setOcorrencia(Posicao.FOLGA) }
+  end
+
+  rule "Regra 04 - Quando ocorre um evento de desembarque em uma escala de trabalho e ainda não existe ocorrência definida para a próxima posição, então a mesma é folga"
+      no-loop
+    	when
+    	   $evento : Evento(tipo == Evento.DESEMBARQUE)
+           and
+           $escala : Escala(tipo == Escala.TRABALHO,
+                            $evento.data >= inicio,
+                            $evento.data <= termino,
+                            trabalhador == $evento.trabalhador)
+           and
+           $proximaPosicao : Posicao(data == $evento.proximaData,
+                              ocorrencia == Posicao.NAO_CALCULADA,
+                              trabalhador == $evento.trabalhador)
+    	then
+    		modify ($proximaPosicao) { setOcorrencia(Posicao.FOLGA) }
+    end
+
+rule "Regra 04 - Desembarque conta como trabalho"
+no-loop
+     	when
+    	   $evento : Evento(tipo == Evento.DESEMBARQUE)
+           $escala : Escala(tipo == Escala.TRABALHO,
+                            $evento.data >= inicio,
+                            $evento.data <= termino,
+                            trabalhador == $evento.trabalhador)
+           $posicao : Posicao(data == $evento.data,
+                              ocorrencia == Posicao.NAO_CALCULADA,
+                              trabalhador == $evento.trabalhador)
+    	then
+    	    modify ($posicao) { setOcorrencia(Posicao.REGULAR) };
+    end
+
+
+
+  rule "Regra 05 - Quando existe uma posição onde a ocorrência é regular, então todos os acumuladores devem ter seu valor igual ao da posição anterior, acrescido de +1"
+   	when
+   		$posicao : Posicao(ocorrencia == Posicao.REGULAR,
+   		                   nenhumAcumuladorDefinido)
+   		and
+   		$posicaoAnterior : Posicao(data == $posicao.dataAnterior,
+                   			       trabalhador == $posicao.trabalhador,
+                   			       todosAcumuladoresDefinidos)
+   	then
+   		modify ($posicao) { setAcumuladorDiasTrabalho($posicaoAnterior.getAcumuladorDiasTrabalho() + 1) }
+   		modify ($posicao) { setAcumuladorFolgasAdquiridas($posicaoAnterior.getAcumuladorFolgasAdquiridas() + 1) }
+   		modify ($posicao) { setAcumuladorFolgasIndenizaveis($posicaoAnterior.getAcumuladorFolgasIndenizaveis() + 1) }
+ end
+
+ rule "Regra 06 - Quando existe um evento de folga numa escala de folga DT=0, DA=-1, DI=-1"
+    when
+        $evento : Evento(tipo == Evento.FOLGA)
+        $posicao : Posicao(data == $evento.data,
+                           trabalhador == $evento.trabalhador)
+        $escala : Escala(tipo == Escala.FOLGA,
+          			     $evento.trabalhador == trabalhador,
+          				 $evento.data >= inicio,
+         				 $evento.data <= termino)
+        $posicaoAnterior : Posicao(data == $posicao.dataAnterior,
+                                   trabalhador == $posicao.trabalhador,
+                                   todosAcumuladoresDefinidos)
+    then
+        modify ($posicao) { setAcumuladorDiasTrabalho(0) }
+        modify ($posicao) { setAcumuladorFolgasAdquiridas($posicaoAnterior.getAcumuladorFolgasAdquiridas() - 1) }
+        modify ($posicao) { setAcumuladorFolgasIndenizaveis($posicaoAnterior.getAcumuladorFolgasIndenizaveis() - 1) }
+ end
